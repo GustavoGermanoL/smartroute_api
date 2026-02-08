@@ -29,6 +29,10 @@ public class Entrega {
     private Double latitude;
     private Double longitude;
 
+    private Integer ordemNaRota;
+
+    private Double distanciaAteAqui;
+    
     // Status para controle
     @Enumerated(EnumType.STRING)
     private StatusEntrega status; // PENDENTE, ROTEIRIZADO, ENTREGUE
