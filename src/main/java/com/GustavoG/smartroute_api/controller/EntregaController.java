@@ -1,6 +1,7 @@
 package com.GustavoG.smartroute_api.controller;
 
 import com.GustavoG.smartroute_api.domain.Entrega;
+import com.GustavoG.smartroute_api.domain.StatusEntrega;
 import com.GustavoG.smartroute_api.repository.EntregaRepository;
 import com.GustavoG.smartroute_api.service.EntregaService;
 import com.GustavoG.smartroute_api.service.OtimizacaoService;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/entregas")
@@ -72,6 +74,22 @@ public class EntregaController {
     public ResponseEntity<String> limparBanco() {
         entregaRepository.deleteAll(); // Apaga tudo da tabela entregas
         return ResponseEntity.ok("Banco de dados limpo! Pode subir nova rota.");
+    }
+
+    // Atualizar latitude/longitude manualmente
+    @PatchMapping("/{id}/coordenada")
+    public ResponseEntity<Entrega> atualizarCoordenada(
+            @PathVariable Long id, 
+            @RequestBody Map<String, Double> novaPosicao) {
+        
+        Entrega entrega = entregaRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Entrega não encontrada"));
+        
+        entrega.setLatitude(novaPosicao.get("lat"));
+        entrega.setLongitude(novaPosicao.get("lng"));
+        entrega.setStatus(StatusEntrega.PENDENTE); // Marca como pendente para re-roteirizar
+        
+        return ResponseEntity.ok(entregaRepository.save(entrega));
     }
  
 }

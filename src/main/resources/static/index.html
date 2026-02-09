@@ -3,103 +3,313 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SmartRoute - Motorista</title>
+    <title>SmartRoute - Editor de Rotas Visual</title>
+    
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
     <style>
-        .card-entrega { margin-bottom: 15px; border-left: 5px solid #ccc; }
-        .status-PENDENTE { border-left-color: #ffc107; }
-        .status-ROTEIRIZADO { border-left-color: #0d6efd; }
-        .status-ENTREGUE { border-left-color: #198754; opacity: 0.6; }
-        .btn-navegar { width: 100%; margin-top: 5px; }
-        .ordem-badge { font-size: 1.2em; font-weight: bold; width: 40px; text-align: center; }
+        #map { height: 600px; width: 100%; border-radius: 10px; border: 2px solid #dee2e6; }
+        .sidebar { height: 600px; overflow-y: auto; }
+        .card-entrega { font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
+        .card-entrega:hover { background-color: #e9ecef; transform: translateX(5px); }
+        .badge-ordem { font-size: 1.1em; width: 30px; text-align: center; }
+
+        /* --- NOVO CSS PARA AS BOLINHAS NUMERADAS --- */
+        .custom-div-icon {
+            background: transparent;
+            border: none;
+        }
+        .marker-pin {
+            width: 30px;
+            height: 30px;
+            border-radius: 50% 50% 50% 0;
+            background: #0d6efd; /* Cor padrão (azul Bootstrap) */
+            position: absolute;
+            transform: rotate(-45deg);
+            left: 50%;
+            top: 50%;
+            margin: -15px 0 0 -15px;
+            box-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            /* Borda branca para destacar do mapa */
+            border: 2px solid white; 
+        }
+        /* Cor diferente para quando não está roteirizado */
+        .marker-pin.pendente { background: #ffc107; color: black; }
+
+        /* O número dentro da bolinha */
+        .marker-number {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            left: 0;
+            top: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            transform: rotate(45deg); /* Desvira o número */
+        }
+        /* Ajusta cor do texto para fundo amarelo */
+        .marker-pin.pendente .marker-number { color: black; }
     </style>
 </head>
 <body class="bg-light">
 
-<div class="container py-3">
-    <h3 class="mb-3 text-center">🚚 Minha Rota de Hoje</h3>
-    
-    <div class="d-flex justify-content-between mb-3">
-        <button onclick="carregarRota()" class="btn btn-primary">🔄 Atualizar Lista</button>
-        <span id="total-entregas" class="badge bg-secondary align-self-center">0 pacotes</span>
+<div class="container-fluid py-3">
+    <div class="row mb-3">
+        <div class="col-md-8 d-flex align-items-center">
+            <h3 class="m-0 me-3">🗺️ SmartRoute Editor</h3>
+            <span class="badge bg-secondary">Total: <span id="total-count">0</span></span>
+        </div>
+        <div class="col-md-4 text-end">
+            <button onclick="recalcularRota()" class="btn btn-success fw-bold shadow-sm">
+                <i class="fas fa-route"></i> 🚀 Recalcular Ordem
+            </button>
+        </div>
     </div>
 
-    <div id="lista-entregas">
-        <div class="text-center mt-5">
-            <div class="spinner-border text-primary" role="status"></div>
-            <p>Carregando rota otimizada...</p>
+    <div class="row">
+        <div class="col-md-8 mb-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body p-1">
+                    <div id="map"></div>
+                </div>
+                <div class="card-footer text-muted small bg-white">
+                    💡 <strong>Dica:</strong> Arraste as bolinhas azuis para corrigir a localização exata da casa. Depois clique em "Recalcular Ordem".
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-white fw-bold py-3">
+                   Sequência Otimizada
+                </div>
+                <div class="card-body p-0 sidebar bg-white" id="lista-entregas">
+                    <div class="text-center p-4 text-muted">Carregando...</div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+<script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script>
+
 <script>
-    const API_URL = '/entregas'; // Chama seu Backend local
+    const API_URL = '/entregas';
+    let map;
+    let markers = {};
+    let entregasData = [];
+    let routeLayer;
 
-    async function carregarRota() {
+    function initMap() {
+        // Centro inicial (Sorocaba)
+        map = L.map('map').setView([-23.5015, -47.4521], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+    }
+
+    async function carregarDados() {
         try {
-            const response = await fetch(API_URL);
-            const entregas = await response.json();
-            
-            // Filtra apenas as que têm ordem definida (roteirizadas)
-            const rota = entregas.filter(e => e.ordemNaRota != null)
-                                 .sort((a, b) => a.ordemNaRota - b.ordemNaRota);
-
-            document.getElementById('total-entregas').innerText = rota.length + " pacotes";
-            const container = document.getElementById('lista-entregas');
-            container.innerHTML = '';
-
-            if (rota.length === 0) {
-                container.innerHTML = '<div class="alert alert-warning">Nenhuma rota calculada. Faça o upload e roteirize primeiro!</div>';
-                return;
-            }
-
-            rota.forEach(entrega => {
-                const html = `
-                    <div class="card card-entrega shadow-sm status-${entrega.status}">
-                        <div class="card-body">
-                            <div class="d-flex align-items-center">
-                                <div class="me-3">
-                                    <div class="bg-dark text-white rounded-circle p-2 ordem-badge">
-                                        ${entrega.ordemNaRota}
-                                    </div>
-                                </div>
-                                <div class="flex-grow-1">
-                                    <h5 class="card-title m-0">${entrega.logradouro}, ${entrega.numero}</h5>
-                                    <small class="text-muted">Pacote: ${entrega.codigoPacote}</small>
-                                </div>
-                            </div>
-                            
-                            <hr class="my-2">
-                            
-                            <div class="row g-2">
-                                <div class="col-6">
-                                    <a href="https://www.google.com/maps/dir/?api=1&destination=${entrega.latitude},${entrega.longitude}" 
-                                       target="_blank" class="btn btn-outline-primary btn-sm btn-navegar">
-                                       🗺️ Google Maps
-                                    </a>
-                                </div>
-                                <div class="col-6">
-                                    <a href="https://waze.com/ul?ll=${entrega.latitude},${entrega.longitude}&navigate=yes" 
-                                       target="_blank" class="btn btn-outline-info btn-sm btn-navegar">
-                                       🚗 Waze
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-                container.innerHTML += html;
+            const res = await axios.get(API_URL);
+            // Ordena: Roteirizados primeiro pela ordem, depois os pendentes pelo ID
+            entregasData = res.data.sort((a, b) => {
+                if (a.ordemNaRota && b.ordemNaRota) return a.ordemNaRota - b.ordemNaRota;
+                if (!a.ordemNaRota && !b.ordemNaRota) return a.id - b.id;
+                return a.ordemNaRota ? -1 : 1;
             });
-
+            
+            renderizarMapa();
+            renderizarLista();
+            document.getElementById('total-count').innerText = entregasData.length;
         } catch (error) {
-            console.error('Erro:', error);
-            document.getElementById('lista-entregas').innerHTML = 
-                '<div class="alert alert-danger">Erro ao carregar rota. O servidor está rodando?</div>';
+            console.error(error);
+            // alert("Erro ao carregar entregas do backend.");
+            document.getElementById('lista-entregas').innerHTML = '<div class="alert alert-danger m-2">Erro de conexão com o servidor.</div>';
         }
     }
 
-    // Carrega ao abrir a página
-    carregarRota();
+    function renderizarMapa() {
+        // Limpa tudo
+        for (let id in markers) map.removeLayer(markers[id]);
+        markers = {};
+        if (routeLayer) map.removeLayer(routeLayer);
+
+        const validPoints = [];
+
+        entregasData.forEach(entrega => {
+            if (!entrega.latitude || !entrega.longitude) return;
+            validPoints.push([entrega.latitude, entrega.longitude]);
+
+            // --- A MÁGICA ACONTECE AQUI: Ícone Personalizado com Número ---
+            const ordemTexto = entrega.ordemNaRota ? entrega.ordemNaRota : '?';
+            const classeStatus = entrega.ordemNaRota ? '' : 'pendente'; // Amarelo se não tiver ordem
+
+            // Criamos o HTML da bolinha "na mão"
+            const iconHtml = `
+                <div class="marker-pin ${classeStatus}">
+                    <div class="marker-number">${ordemTexto}</div>
+                </div>
+            `;
+
+            const customIcon = L.divIcon({
+                className: 'custom-div-icon',
+                html: iconHtml,
+                iconSize: [30, 42],
+                iconAnchor: [15, 42], // Ponta do alfinete no chão
+                popupAnchor: [0, -35]
+            });
+
+            // Cria o marcador usando nosso ícone customizado
+            const marker = L.marker([entrega.latitude, entrega.longitude], {
+                draggable: true,
+                icon: customIcon, // <--- Usa o ícone novo aqui
+                title: `${ordemTexto} - ${entrega.logradouro}`
+            }).addTo(map);
+
+            // Pop-up melhorado
+            marker.bindPopup(`
+                <div class="text-center">
+                    <h6 class="fw-bold mb-1">Parada #${ordemTexto}</h6>
+                    <p class="mb-1">${entrega.logradouro}, ${entrega.numero}</p>
+                    <span class="badge bg-light text-dark border">${entrega.codigoPacote}</span>
+                </div>
+            `);
+
+            // Evento de arrastar para corrigir
+            marker.on('dragend', async function(event) {
+                const position = marker.getLatLng();
+                // Feedback visual imediato (opcional, muda a opacidade)
+                marker.setOpacity(0.5); 
+
+                try {
+                    await axios.patch(`${API_URL}/${entrega.id}/coordenada`, {
+                        lat: position.lat,
+                        lng: position.lng
+                    });
+                    // Volta opacidade ao normal se salvou
+                    marker.setOpacity(1);
+                    console.log(`Nova posição salva para ID ${entrega.id}`);
+                } catch (err) {
+                    alert("Erro ao salvar nova posição no servidor!");
+                    marker.setOpacity(1);
+                    // Opcional: voltar o pino para a posição original se deu erro
+                }
+            });
+
+            markers[entrega.id] = marker;
+        });
+
+        // Desenha linha reta simples entre os pontos ordenados (feedback visual rápido)
+        if (validPoints.length > 1) {
+             // Filtra só os que já têm ordem para desenhar a linha
+            const routePoints = entregasData
+                .filter(e => e.ordemNaRota && e.latitude)
+                .map(e => [e.latitude, e.longitude]);
+
+            if(routePoints.length > 1) {
+                routeLayer = L.polyline(routePoints, {
+                    color: '#0d6efd',
+                    weight: 3,
+                    opacity: 0.6,
+                    dashArray: '5, 10',
+                    smoothFactor: 1
+                }).addTo(map);
+            }
+            
+            // Ajusta o zoom para caber todos os pontos
+            if (validPoints.length > 0) {
+                 map.fitBounds(validPoints, { padding: [50, 50] });
+            }
+        }
+    }
+
+    function renderizarLista() {
+        const container = document.getElementById('lista-entregas');
+        container.innerHTML = '';
+
+        if (entregasData.length === 0) {
+             container.innerHTML = '<div class="text-center p-4 text-muted">Nenhuma entrega encontrada. Faça upload de um PDF.</div>';
+             return;
+        }
+
+        entregasData.forEach(entrega => {
+            const item = document.createElement('div');
+            item.className = 'p-2 border-bottom card-entrega d-flex align-items-center';
+            
+            const badgeColor = entrega.ordemNaRota ? 'bg-primary' : 'bg-warning text-dark';
+            const ordemTexto = entrega.ordemNaRota || '?';
+
+            item.innerHTML = `
+                <span class="badge ${badgeColor} me-3 badge-ordem p-2">${ordemTexto}</span>
+                <div class="flex-grow-1 overflow-hidden">
+                    <div class="fw-bold text-truncate">
+                        ${entrega.logradouro}, ${entrega.numero}
+                    </div>
+                    <div class="small text-muted d-flex justify-content-between">
+                        <span>${entrega.bairro || 'Sorocaba'}</span>
+                        <span class="badge bg-light text-secondary border">${entrega.status}</span>
+                    </div>
+                </div>
+            `;
+            
+            // Clique na lista foca no mapa e abre o popup
+            item.onclick = () => {
+                if (markers[entrega.id]) {
+                    map.flyTo(markers[entrega.id].getLatLng(), 17, { duration: 1.5 });
+                    markers[entrega.id].openPopup();
+                    // Toca um efeito visual no pino (opcional)
+                    const iconEl = markers[entrega.id].getElement();
+                    if(iconEl) {
+                        iconEl.style.transition = 'transform 0.3s';
+                        iconEl.style.transform += ' scale(1.3)';
+                        setTimeout(() => iconEl.style.transform = iconEl.style.transform.replace(' scale(1.3)', ''), 300);
+                    }
+                }
+            };
+            
+            container.appendChild(item);
+        });
+    }
+
+    async function recalcularRota() {
+        const btn = document.querySelector('button.btn-success');
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Calculando...';
+        btn.disabled = true;
+
+        try {
+            // 1. Chama o backend para rodar o Jsprit
+            await axios.post(`${API_URL}/roteirizar`);
+            
+            // 2. Recarrega os dados para pegar a nova ordem
+            await carregarDados();
+            
+            // Feedback visual
+            alert("✅ Rota recalculada com sucesso! As bolinhas foram reordenadas.");
+
+        } catch (err) {
+            console.error(err);
+            alert("❌ Erro ao roteirizar: " + (err.response?.data || err.message));
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    }
+
+    // Inicialização
+    initMap();
+    carregarDados();
+
+    // Recarrega ao focar na janela (útil se você alterou algo em outra aba)
+    window.onfocus = carregarDados;
 </script>
 
 </body>
