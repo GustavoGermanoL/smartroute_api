@@ -4,10 +4,12 @@ import com.GustavoG.smartroute_api.domain.Entrega;
 import com.GustavoG.smartroute_api.repository.EntregaRepository;
 import com.GustavoG.smartroute_api.service.EntregaService;
 import com.GustavoG.smartroute_api.service.OtimizacaoService;
+import com.GustavoG.smartroute_api.service.mapas.RouteService;
 
 import lombok.RequiredArgsConstructor;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,6 +26,10 @@ public class EntregaController {
 
     @Autowired
     private OtimizacaoService otimizacaoService; // Injete o novo service
+
+    @Autowired
+    private RouteService routeService;
+
 
     @PostMapping("/roteirizar")
     public ResponseEntity<String> criarRota() {
@@ -50,5 +56,22 @@ public class EntregaController {
         }
     }
 
+    @GetMapping("/visualizar-rota")
+    public ResponseEntity<String> getRotaVisual() {
+        // Pega as entregas JÁ ordenadas (Passo importante!)
+        List<Entrega> entregas = entregaRepository.findAll(Sort.by("ordemNaRota"));
+        
+        // Remove quem não foi roteirizado ainda
+        entregas.removeIf(e -> e.getOrdemNaRota() == null);
+
+        String geoJson = routeService.gerarGeoJsonReal(entregas);
+        return ResponseEntity.ok(geoJson);
+    }
+
+    @DeleteMapping
+    public ResponseEntity<String> limparBanco() {
+        entregaRepository.deleteAll(); // Apaga tudo da tabela entregas
+        return ResponseEntity.ok("Banco de dados limpo! Pode subir nova rota.");
+    }
  
 }
